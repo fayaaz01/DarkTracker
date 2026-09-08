@@ -1,0 +1,269 @@
+import json
+import urllib.parse
+from bs4 import BeautifulSoup
+import requests
+import streamlit as st
+
+# Configure the page
+st.set_page_config(
+    page_title="Dark Tracker - Live OSINT Attribution Engine",
+    page_icon="🛡️",
+    layout="wide",
+)
+
+# Custom Amber / Low-Glare Theme (Zero Blue Light Strain)
+st.markdown(
+    """
+    <style>
+    /* Dark charcoal background with warm amber tones */
+    .stApp {
+        background-color: #141210;
+        color: #EBDCB9;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    
+    /* Warm amber headings */
+    h1, h2, h3, h4 {
+        color: #F4A261 !important;
+    }
+    
+    /* Input field design */
+    .stTextInput>div>div>input {
+        background-color: #201D1A;
+        color: #FFF3DE;
+        border: 1px solid #7F5539;
+        border-radius: 6px;
+    }
+    
+    /* Warm button design */
+    .stButton>button {
+        background-color: #DDA15E;
+        color: #141210;
+        font-weight: 700;
+        border: none;
+        border-radius: 6px;
+        padding: 0.5rem 1.6rem;
+    }
+    .stButton>button:hover {
+        background-color: #BC6C25;
+        color: #FFFFFF;
+    }
+
+    /* Metric cards */
+    .metric-card {
+        background-color: #1D1A17;
+        border-left: 4px solid #DDA15E;
+        padding: 14px;
+        border-radius: 5px;
+        margin-bottom: 12px;
+    }
+    </style>
+""",
+    unsafe_allow_html=True,
+)
+
+# Application Header
+st.title("🛡️ Dark Tracker — Live Intelligence Engine")
+st.caption(
+    "100% Local Execution • Real-Time Web & Dark Web Index Queries • Eye-Comfort"
+    " Display"
+)
+
+# Target Input
+col1, col2 = st.columns([3, 1])
+with col1:
+    target_handle = st.text_input(
+        "Enter Suspect Alias / Handle to Investigate:",
+        placeholder="e.g., toradmin, satoshi, root",
+    )
+with col2:
+    st.write("##")
+    execute_search = st.button("Run Live Trace")
+
+
+# Real-time search functions
+def search_ahmia_live(query):
+    """Queries Ahmia's live clearweb gateway for indexed onion services."""
+    results = []
+    encoded_query = urllib.parse.quote_plus(query)
+    url = f"https://ahmia.fi/search/?q={encoded_query}"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    try:
+        response = requests.get(url, headers=headers, timeout=8)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            items = soup.find_all("li", class_="result")
+
+            for item in items[:5]:  # Extract top 5 results
+                title_elem = item.find("h4")
+                cite_elem = item.find("cite")
+                desc_elem = item.find("p")
+
+                title = title_elem.get_text(strip=True) if title_elem else "Index Match"
+                link = cite_elem.get_text(strip=True) if cite_elem else "Hidden Domain"
+                snippet = desc_elem.get_text(strip=True) if desc_elem else "Mention found on indexed page."
+
+                results.append({"title": title, "url": link, "snippet": snippet})
+    except Exception as e:
+        results.append(
+            {"title": "Search Offline", "url": "N/A", "snippet": str(e)}
+        )
+    return results
+
+
+def check_surface_platforms(handle):
+    """Live API checks across public platforms for handle usage and metadata."""
+    found_profiles = []
+    session = requests.Session()
+    session.headers.update(
+        {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    )
+
+    # 1. GitHub Public API Check
+    try:
+        gh_resp = session.get(
+            f"https://api.github.com/users/{handle}", timeout=5
+        )
+        if gh_resp.status_code == 200:
+            gh_data = gh_resp.json()
+            found_profiles.append(
+                {
+                    "Platform": "GitHub",
+                    "Identifier": gh_data.get("login"),
+                    "Associated Name": gh_data.get("name")
+                    or "Not publicly set",
+                    "Location": gh_data.get("location") or "Unknown",
+                    "Public Email": gh_data.get("email") or "Hidden / None",
+                    "Profile URL": gh_data.get("html_url"),
+                    "Account Created": gh_data.get("created_at")[:10]
+                    if gh_data.get("created_at")
+                    else "N/A",
+                }
+            )
+    except Exception:
+        pass
+
+    # 2. Reddit User Existence Check
+    try:
+        reddit_resp = session.get(
+            f"https://www.reddit.com/user/{handle}/about.json", timeout=5
+        )
+        if reddit_resp.status_code == 200:
+            r_data = reddit_resp.json().get("data", {})
+            found_profiles.append(
+                {
+                    "Platform": "Reddit",
+                    "Identifier": r_data.get("name"),
+                    "Associated Name": "Reddit Handle Match",
+                    "Location": "N/A",
+                    "Public Email": "N/A",
+                    "Profile URL": f"https://www.reddit.com/user/{handle}",
+                    "Account Created": "Active Profile",
+                }
+            )
+    except Exception:
+        pass
+
+    # 3. HackerNews User API
+    try:
+        hn_resp = session.get(
+            f"https://hacker-news.firebaseio.com/v0/user/{handle}.json",
+            timeout=5,
+        )
+        if hn_resp.status_code == 200 and hn_resp.json() is not None:
+            hn_data = hn_resp.json()
+            found_profiles.append(
+                {
+                    "Platform": "HackerNews",
+                    "Identifier": hn_data.get("id"),
+                    "Associated Name": "Tech Forum User",
+                    "Location": "N/A",
+                    "Public Email": "N/A",
+                    "Profile URL": f"https://news.ycombinator.com/user?id={handle}",
+                    "Account Created": f"Karma: {hn_data.get('karma', 0)}",
+                }
+            )
+    except Exception:
+        pass
+
+    return found_profiles
+
+
+# Main Execution Logic
+if execute_search:
+    clean_handle = target_handle.strip()
+    if not clean_handle:
+        st.warning("Please type a valid handle or username.")
+    else:
+        st.write("---")
+
+        with st.status(
+            "Executing real-time investigative scans...", expanded=True
+        ) as status:
+            st.write(
+                f"📡 Querying live Ahmia Tor index for target '{clean_handle}'..."
+            )
+            onion_records = search_ahmia_live(clean_handle)
+
+            st.write(
+                f"🌐 Probing public platform APIs for active handles..."
+            )
+            surface_records = check_surface_platforms(clean_handle)
+
+            status.update(
+                label="Trace Complete — Live Data Retrieved!",
+                state="complete",
+                expanded=False,
+            )
+
+        # Overview Metrics
+        m1, m2, m3 = st.columns(3)
+        m1.markdown(
+            f'<div class="metric-card"><strong>Queried Handle</strong><br>{clean_handle}</div>',
+            unsafe_allow_html=True,
+        )
+        m2.markdown(
+            f'<div class="metric-card"><strong>Tor Index Hits</strong><br>{len(onion_records)} Matches</div>',
+            unsafe_allow_html=True,
+        )
+        m3.markdown(
+            f'<div class="metric-card"><strong>Active Surface Profiles</strong><br>{len(surface_records)} Found</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Section 1: Surface Web Discoveries
+        st.subheader("1. Cross-Platform Surface Hits (Live Verified)")
+        if surface_records:
+            st.dataframe(surface_records, use_container_width=True)
+        else:
+            st.info(
+                "No identical public accounts confirmed on primary developer & discussion platforms."
+            )
+
+        # Section 2: Dark Web (.onion) Mentions
+        st.subheader("2. Dark Web Search Index Results (Ahmia)")
+        if onion_records:
+            for item in onion_records:
+                st.markdown(f"**{item['title']}**")
+                st.caption(f"Domain / Address: `{item['url']}`")
+                st.write(item["snippet"])
+                st.write("---")
+        else:
+            st.info(
+                "No public index entries currently registered for this query."
+            )
+
+        # Export Report
+        dossier_data = {
+            "query": clean_handle,
+            "surface_matches": surface_records,
+            "darkweb_matches": onion_records,
+        }
+
+        st.download_button(
+            label="📄 Export Live Investigation Dossier (JSON)",
+            data=json.dumps(dossier_data, indent=4),
+            file_name=f"{clean_handle}_osint_report.json",
+            mime="application/json",
+        )
